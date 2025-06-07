@@ -122,9 +122,17 @@ fn py_kosha(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pymodule]
 #[pyo3(name = "lipi")]
 fn py_lipi(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Basic types and functions
     m.add_class::<lipi::PyScheme>()?;
     m.add_function(wrap_pyfunction!(lipi::detect, m)?)?;
     m.add_function(wrap_pyfunction!(lipi::transliterate, m)?)?;
+
+    // Extensible transliteration types
+    m.add_class::<lipi::PyPatternType>()?;
+    m.add_class::<lipi::PyDiscoveredPattern>()?;
+    m.add_class::<lipi::PyExtensionStats>()?;
+    m.add_class::<lipi::PyExtensibleTransliterationResult>()?;
+    m.add_class::<lipi::PyExtensibleLipika>()?;
 
     Ok(())
 }

@@ -4,7 +4,9 @@ use pyo3::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use vidyut_lipi as lipi;
-use vidyut_lipi::{Lipika, Scheme};
+use vidyut_lipi::{ExtensibleLipika, ExtensibleTransliterationResult, ExtensionStats, Lipika, Scheme};
+use vidyut_lipi::extensions::{DiscoveredPattern};
+use vidyut_lipi::extensions::runtime_extensible::{PatternType};
 
 /// Generates the following boilerplate methods:
 /// - `__hash__`
@@ -503,4 +505,264 @@ pub fn transliterate(input_text: &str, source: PyScheme, dest: PyScheme) -> Stri
         static LIPIKA: RefCell<Lipika> = RefCell::new(Lipika::new());
     };
     LIPIKA.with_borrow_mut(|lipika| lipika.transliterate(input_text, source.into(), dest.into()))
+}
+
+/// Python wrapper for PatternType enum
+#[pyclass(name = "PatternType", module = "lipi", eq, eq_int)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum PyPatternType {
+    /// Accent patterns like anudatta, udatta
+    Accent,
+    /// Section delimiters
+    Section,
+    /// Nasal markers
+    Nasal,
+    /// Musical notation markers
+    Musical,
+    /// Custom pattern type (simplified for Python)
+    Custom,
+}
+
+impl From<PatternType> for PyPatternType {
+    fn from(pt: PatternType) -> Self {
+        match pt {
+            PatternType::Accent => PyPatternType::Accent,
+            PatternType::Section => PyPatternType::Section,
+            PatternType::Nasal => PyPatternType::Nasal,
+            PatternType::Musical => PyPatternType::Musical,
+            PatternType::Custom(_) => PyPatternType::Custom,
+        }
+    }
+}
+
+impl From<PyPatternType> for PatternType {
+    fn from(pt: PyPatternType) -> Self {
+        match pt {
+            PyPatternType::Accent => PatternType::Accent,
+            PyPatternType::Section => PatternType::Section,
+            PyPatternType::Nasal => PatternType::Nasal,
+            PyPatternType::Musical => PatternType::Musical,
+            PyPatternType::Custom => PatternType::Custom("python".to_string()),
+        }
+    }
+}
+
+/// Python wrapper for DiscoveredPattern
+#[pyclass(name = "DiscoveredPattern", module = "lipi")]
+#[derive(Clone, Debug)]
+pub struct PyDiscoveredPattern {
+    /// Source pattern discovered
+    #[pyo3(get)]
+    pub source: String,
+    /// Target mapping for the pattern
+    #[pyo3(get)]
+    pub target: String,
+    /// Type of pattern discovered
+    #[pyo3(get)]
+    pub pattern_type: PyPatternType,
+    /// Confidence score (0.0 to 1.0)
+    #[pyo3(get)]
+    pub confidence: f64,
+    /// Frequency count in the text
+    #[pyo3(get)]
+    pub frequency: usize,
+    /// Contexts where pattern was found
+    #[pyo3(get)]
+    pub contexts: Vec<String>,
+}
+
+impl From<DiscoveredPattern> for PyDiscoveredPattern {
+    fn from(dp: DiscoveredPattern) -> Self {
+        Self {
+            source: dp.source,
+            target: dp.target,
+            pattern_type: dp.pattern_type.into(),
+            confidence: dp.confidence as f64,
+            frequency: dp.frequency,
+            contexts: dp.contexts,
+        }
+    }
+}
+
+/// Python wrapper for ExtensionStats
+#[pyclass(name = "ExtensionStats", module = "lipi")]
+#[derive(Clone, Debug)]
+pub struct PyExtensionStats {
+    /// Number of patterns discovered
+    #[pyo3(get)]
+    pub patterns_discovered: usize,
+    /// Number of extensions applied
+    #[pyo3(get)]
+    pub extensions_applied: usize,
+    /// Number of successful round-trip validations
+    #[pyo3(get)]
+    pub round_trip_successes: usize,
+    /// Number of failed round-trip validations
+    #[pyo3(get)]
+    pub round_trip_failures: usize,
+    /// Number of unknown patterns encountered
+    #[pyo3(get)]
+    pub unknown_patterns_count: usize,
+}
+
+impl From<ExtensionStats> for PyExtensionStats {
+    fn from(stats: ExtensionStats) -> Self {
+        Self {
+            patterns_discovered: stats.patterns_discovered,
+            extensions_applied: stats.extensions_applied,
+            round_trip_successes: stats.round_trip_successes,
+            round_trip_failures: stats.round_trip_failures,
+            unknown_patterns_count: stats.unknown_patterns_count,
+        }
+    }
+}
+
+/// Python wrapper for ExtensibleTransliterationResult
+#[pyclass(name = "ExtensibleTransliterationResult", module = "lipi")]
+#[derive(Clone, Debug)]
+pub struct PyExtensibleTransliterationResult {
+    /// The transliterated result
+    #[pyo3(get)]
+    pub result: String,
+    /// Patterns discovered during transliteration
+    #[pyo3(get)]
+    pub discovered_patterns: Vec<PyDiscoveredPattern>,
+    /// Whether round-trip validation succeeded
+    #[pyo3(get)]
+    pub round_trip_valid: bool,
+    /// Warning messages
+    #[pyo3(get)]
+    pub warnings: Vec<String>,
+}
+
+impl From<ExtensibleTransliterationResult> for PyExtensibleTransliterationResult {
+    fn from(result: ExtensibleTransliterationResult) -> Self {
+        Self {
+            result: result.result,
+            discovered_patterns: result.discovered_patterns.into_iter().map(|p| p.into()).collect(),
+            round_trip_valid: result.round_trip_valid,
+            warnings: result.warnings,
+        }
+    }
+}
+
+/// Python wrapper for ExtensibleLipika - enhanced transliterator with runtime extensibility
+#[pyclass(name = "ExtensibleLipika", module = "lipi")]
+pub struct PyExtensibleLipika {
+    inner: ExtensibleLipika,
+}
+
+#[pymethods]
+impl PyExtensibleLipika {
+    /// Create a new ExtensibleLipika instance
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            inner: ExtensibleLipika::new(),
+        }
+    }
+
+    /// Transliterate with runtime pattern discovery and schema extension
+    ///
+    /// Args:
+    ///     input_text: Text to transliterate
+    ///     source: Source script scheme
+    ///     dest: Destination script scheme
+    ///     source_id: Optional source identifier for configuration
+    ///
+    /// Returns:
+    ///     ExtensibleTransliterationResult with discovered patterns and metadata
+    #[pyo3(signature = (input_text, source, dest, source_id=None))]
+    pub fn transliterate_extensible(
+        &mut self,
+        input_text: &str,
+        source: PyScheme,
+        dest: PyScheme,
+        source_id: Option<&str>,
+    ) -> PyResult<PyExtensibleTransliterationResult> {
+        match self.inner.transliterate_extensible(input_text, source.into(), dest.into(), source_id) {
+            Ok(result) => Ok(result.into()),
+            Err(e) => Err(PyValueError::new_err(format!("Transliteration failed: {}", e))),
+        }
+    }
+
+    /// Transliterate using base mapping (no extensions)
+    ///
+    /// Args:
+    ///     input_text: Text to transliterate
+    ///     source: Source script scheme
+    ///     dest: Destination script scheme
+    ///
+    /// Returns:
+    ///     Transliterated text string
+    pub fn transliterate_base(
+        &self,
+        input_text: &str,
+        source: PyScheme,
+        dest: PyScheme,
+    ) -> String {
+        self.inner.transliterate_base(input_text, source.into(), dest.into())
+    }
+
+    /// Add a custom mapping for specific patterns
+    ///
+    /// Args:
+    ///     source_scheme: Source scheme to extend
+    ///     dest_scheme: Destination scheme to extend
+    ///     source_pattern: Pattern in source scheme
+    ///     target_pattern: Corresponding pattern in destination scheme
+    ///     source_id: Optional source identifier
+    ///
+    /// Returns:
+    ///     Result indicating success or failure
+    #[pyo3(signature = (source_scheme, dest_scheme, source_pattern, target_pattern, source_id=None))]
+    pub fn add_custom_mapping(
+        &mut self,
+        source_scheme: PyScheme,
+        dest_scheme: PyScheme,
+        source_pattern: &str,
+        target_pattern: &str,
+        source_id: Option<&str>,
+    ) -> PyResult<()> {
+        match self.inner.add_custom_mapping(
+            source_scheme.into(),
+            dest_scheme.into(),
+            source_pattern,
+            target_pattern,
+            source_id,
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(PyValueError::new_err(format!("Failed to add custom mapping: {}", e))),
+        }
+    }
+
+    /// Get all discovered patterns across all mappings
+    ///
+    /// Returns:
+    ///     List of all discovered patterns
+    pub fn get_all_discovered_patterns(&self) -> Vec<PyDiscoveredPattern> {
+        self.inner.get_all_discovered_patterns()
+            .iter()
+            .map(|p| p.clone().into())
+            .collect()
+    }
+
+    /// Get extension statistics
+    ///
+    /// Returns:
+    ///     Statistics about pattern discovery and extensions
+    pub fn get_stats(&self) -> PyExtensionStats {
+        self.inner.get_stats().clone().into()
+    }
+
+    /// Export discovered patterns to YAML for reuse
+    ///
+    /// Returns:
+    ///     YAML string containing discovered patterns and statistics
+    pub fn export_discovered_patterns_yaml(&self) -> PyResult<String> {
+        match self.inner.export_discovered_patterns_yaml() {
+            Ok(yaml) => Ok(yaml),
+            Err(e) => Err(PyValueError::new_err(format!("Failed to export patterns: {}", e))),
+        }
+    }
 }
